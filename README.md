@@ -206,9 +206,3 @@ npm run build
 ## License
 
 [AGPLv3](LICENSE)
-
-## 支持作者
-
-如果本项目对你有帮助，欢迎支持作者持续开发：
-
-![支持作者](./支持作者.jpg)
