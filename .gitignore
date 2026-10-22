@@ -294,3 +294,10 @@ static/frontend/dist/
 gui/user_config.json
 
 .multi-instance-runtime/
+
+# Local deployment artifacts (never publish: may contain credentials/session data)
+login_shots/
+wire_samples/
+probe*.py
+login_driver.py
+PI_TASK_IMAGE.md

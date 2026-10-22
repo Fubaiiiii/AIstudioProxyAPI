@@ -52,11 +52,22 @@ try:
     _original_launch_options = camoufox.utils.launch_options
 
     def _patched_launch_options(*args, **kwargs):
+        # Local fix: force a standard desktop window size. The fingerprint
+        # generated on the launch_server path can be ~500px wide, which flips
+        # AI Studio into its narrow layout (run-settings panel absent from
+        # the DOM, parameter controls unusable, keyboard-only submit).
+        kwargs.setdefault("window", (1280, 800))
         # Call original to get the full config dict (which includes defaults like proxy=None)
         opts = _original_launch_options(*args, **kwargs)
         # Remove 'proxy' key if it is None, so it doesn't get sent to the JS launcher
         if "proxy" in opts and opts["proxy"] is None:
             del opts["proxy"]
+        # Local fix: camoufox 0.4.11 launch_options passes headless='virtual' through
+        # verbatim, and the Node launcher rejects the string ("expected boolean").
+        # We already run our own Xvfb (DISPLAY is set), so launching headed on that
+        # display is exactly what 'virtual' mode intends.
+        if opts.get("headless") == "virtual":
+            opts["headless"] = False
         return opts
 
     # Replace the function in camoufox.server module so launch_server uses our wrapper

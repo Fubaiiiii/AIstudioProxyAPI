@@ -177,7 +177,12 @@ async def initialize_page_logic(  # pragma: no cover
             if storage_state_path_to_use
             else None
         )
-        context_options: Dict[str, Any] = {"viewport": {"width": 460, "height": 800}}
+        # Local patch: upstream hardcodes a 460x800 (phone-like) viewport,
+        # which flips the current AI Studio UI into its narrow layout where
+        # the run-settings panel is absent from the DOM, parameter controls
+        # are unreachable and the submit button never enables. Use a normal
+        # desktop viewport instead.
+        context_options: Dict[str, Any] = {"viewport": {"width": 1280, "height": 800}}
         if storage_state_path_to_use:
             context_options["storage_state"] = storage_state_path_to_use
             from api_utils.server_state import state
@@ -433,12 +438,24 @@ async def initialize_page_logic(  # pragma: no cover
 
             model_name_locator = found_page.locator(MODEL_NAME_SELECTOR)
             try:
-                model_name_on_page = await model_name_locator.first.inner_text(
-                    timeout=5000
+                # Local patch: read textContent (visibility-independent); the
+                # node lives in the run-settings panel, which may be collapsed.
+                await model_name_locator.first.wait_for(
+                    state="attached", timeout=20000
+                )
+                model_name_on_page = (
+                    await model_name_locator.first.evaluate(
+                        "e => (e.textContent || '').trim()"
+                    )
                 )
             except PlaywrightAsyncError as e:
-                logger.error(f"Error getting model name (model_name_locator): {e}")
-                raise
+                # Local patch: the model name is only used for the success log
+                # line below. In slow-proxy environments the run-settings panel
+                # can render after the input area, so don't fail startup over it.
+                logger.warning(
+                    f"Model name read timed out, continuing init without it: {e}"
+                )
+                model_name_on_page = "unknown"
 
             result_page_instance = found_page
             result_page_ready = True
@@ -627,6 +644,11 @@ async def enable_temporary_chat_mode(page: AsyncPage) -> bool:  # pragma: no cov
     Check and enable "Temporary chat" mode in the AI Studio interface.
     Supports both direct UI visibility and collapsed menu visibility.
     """
+    # LOCAL PATCH: temporary chat mode makes GenerateContent fail with
+    # PERMISSION_DENIED in this deployment, and callers re-enable it after
+    # every chat clear. Hard-disable it at this single choke point.
+    logger.debug("[UI] Temporary chat mode hard-disabled by local patch")
+    return False
     incognito_selector = (
         "button[data-test-incognito-toggle], "
         'button[aria-label="Temporary chat toggle"], '

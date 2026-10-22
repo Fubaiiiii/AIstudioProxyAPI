@@ -43,7 +43,10 @@ class InputController(BaseController):
                 AUTOSIZE_WRAPPER_SELECTORS[2:]
             )  # ms-autosize-textarea element
         )
-        submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
+        # LOCAL PATCH: probe-proven Run button locator (see page_controller.py)
+        submit_button_locator = self.page.locator(
+            'ms-run-button button, button:has-text("Run")'
+        ).first
 
         try:
             await expect_async(prompt_textarea_locator).to_be_visible(timeout=5000)
@@ -51,17 +54,9 @@ class InputController(BaseController):
                 check_client_disconnected, "After Input Visible"
             )
 
-            # Fill text using JavaScript
-            await prompt_textarea_locator.evaluate(
-                """
-                (element, text) => {
-                    element.value = text;
-                    element.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-                    element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-                }
-                """,
-                prompt,
-            )
+            # LOCAL PATCH: fill via Playwright (see page_controller.py note)
+            await prompt_textarea_locator.click()
+            await prompt_textarea_locator.fill(prompt)
             autosize_target = autosize_wrapper_locator
             if await autosize_target.count() == 0:
                 autosize_target = legacy_autosize_wrapper
@@ -460,7 +455,7 @@ class InputController(BaseController):
 
                 # Method 2: Check submit button status
                 if not submission_success:
-                    submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
+                    submit_button_locator = self.page.locator('ms-run-button button, button:has-text("Run")').first  # LOCAL PATCH
                     try:
                         is_disabled = await submit_button_locator.is_disabled(
                             timeout=2000
@@ -587,7 +582,7 @@ class InputController(BaseController):
                     )
                     submission_success = True
                 if not submission_success:
-                    submit_button_locator = self.page.locator(SUBMIT_BUTTON_SELECTOR)
+                    submit_button_locator = self.page.locator('ms-run-button button, button:has-text("Run")').first  # LOCAL PATCH
                     try:
                         is_disabled = await submit_button_locator.is_disabled(
                             timeout=2000

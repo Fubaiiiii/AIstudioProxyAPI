@@ -1,8 +1,11 @@
 import json
 import logging
+import os
 import re
 import sys
+import time
 import zlib
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote
 
@@ -24,6 +27,21 @@ class HttpInterceptor:
         self.log_dir = log_dir
         self.logger = logging.getLogger("http_interceptor")
         self.response_buffer = ""  # Persistent buffer for accumulating response data
+        # LOCAL DEBUG HOOK (image-output work): when AI_PROXY_WIRE_DUMP=1,
+        # accumulate the raw decoded stream bytes per request and dump them
+        # to wire_samples/ when the stream finishes, so the exact upstream
+        # payload shape (e.g. image responses) can be studied offline.
+        self._wire_dump_enabled = os.environ.get("AI_PROXY_WIRE_DUMP") == "1"
+        self._wire_bytes = bytearray()
+        # Dedupe keys for image parts already emitted in this request
+        # (upstream resends the identical image in many stream chunks).
+        self._emitted_image_keys: set = set()
+        # Consecutive parse passes adding no new content after an image
+        # was emitted (see image-completion synthesis in parse below).
+        self._img_tail_streak: int = 0
+        # Extracted (body+reason) length of the previous parse pass; the
+        # image-completion synthesis compares growth, not emptiness.
+        self._img_prev_text_len: int = -1
         # Accumulate unique function calls across streaming chunks
         # Key: (function_name, params_hash) - Value: {"name": str, "params": dict}
         self._accumulated_function_calls: dict[tuple[str, str], dict] = {}
@@ -47,6 +65,23 @@ class HttpInterceptor:
         # Silence http_interceptor by default (too verbose)
         logging.getLogger("http_interceptor").setLevel(logging.WARNING)
 
+    def _flush_wire_dump(self, path: str = "") -> None:
+        """Write accumulated raw stream bytes to wire_samples/ (debug hook)."""
+        if not self._wire_bytes:
+            return
+        try:
+            out_dir = Path(__file__).resolve().parent.parent / "wire_samples"
+            out_dir.mkdir(exist_ok=True)
+            safe_path = re.sub(r"[^A-Za-z0-9]+", "_", path or "stream")[-60:]
+            out_file = out_dir / f"{int(time.time())}_{safe_path}.bin"
+            out_file.write_bytes(bytes(self._wire_bytes))
+            self.logger.warning(
+                f"[WireDump] wrote {len(self._wire_bytes)} bytes to {out_file.name}"
+            )
+        except Exception:
+            pass
+        self._wire_bytes = bytearray()
+
     def reset_for_new_request(self) -> None:
         """Reset interceptor state for a new request.
 
@@ -54,8 +89,15 @@ class HttpInterceptor:
         Should be called at the start of each new GenerateContent request to
         ensure clean state.
         """
+        if self._wire_dump_enabled:
+            # The previous request's stream is over by now; flush its bytes.
+            self._flush_wire_dump("prev_request")
         self.response_buffer = ""
         self._accumulated_function_calls.clear()
+        self._wire_bytes = bytearray()
+        self._emitted_image_keys = set()
+        self._img_tail_streak = 0
+        self._img_prev_text_len = -1
 
     @staticmethod
     def should_intercept(host: str, path: str):
@@ -127,6 +169,11 @@ class HttpInterceptor:
             # Handle gzip encoding
             decoded_data = self._decompress_zlib_stream(decoded_data)
 
+            if self._wire_dump_enabled and decoded_data:
+                self._wire_bytes += decoded_data
+                if is_done or len(self._wire_bytes) > 32 * 1024 * 1024:
+                    self._flush_wire_dump(path)
+
             # Convert to string and accumulate in persistent buffer
             try:
                 decoded_str = decoded_data.decode("utf-8")
@@ -181,6 +228,32 @@ class HttpInterceptor:
                     try:
                         json_data = json.loads(match.group(0))
                         payload = json_data[0][0]
+
+                        # LOCAL PATCH (image output): image parts arrive as
+                        # payload[1]=None with payload[2]=[mime, base64].
+                        # Verified against a live gemini-3.1-flash-image
+                        # stream capture (2026-10-21): the identical image is
+                        # resent in many chunks, so emit each unique image
+                        # once, as a Markdown data URI inside the body. This
+                        # keeps the OpenAI text-content shape unchanged.
+                        if (
+                            len(payload) >= 3
+                            and payload[1] is None
+                            and isinstance(payload[2], list)
+                            and len(payload[2]) == 2
+                            and isinstance(payload[2][0], str)
+                            and payload[2][0].startswith("image/")
+                            and isinstance(payload[2][1], str)
+                            and payload[2][1]
+                        ):
+                            _mime, _b64 = payload[2]
+                            _key = (_mime, len(_b64), _b64[:64])
+                            if _key not in self._emitted_image_keys:
+                                self._emitted_image_keys.add(_key)
+                                resp["body"] += (
+                                    f"\n![generated image]"
+                                    f"(data:{_mime};base64,{_b64})\n"
+                                )
 
                         # Debug: Log payload structure for function call detection
                         if len(payload) >= 10 and FUNCTION_CALLING_DEBUG:
@@ -280,6 +353,29 @@ class HttpInterceptor:
                     # During streaming, still return the current accumulated list
                     # so that has_seen_functions can be set correctly
                     resp["function"] = list(self._accumulated_function_calls.values())
+
+                # LOCAL PATCH (image completion v2): upstream image streams
+                # are cumulative resends — each pass re-extracts the SAME
+                # full text, so "empty pass" never occurs (v1's flaw,
+                # verified live 2026-10-22 evening: 247 items, no fire).
+                # Compare extracted length instead: once an image has been
+                # emitted, count consecutive passes whose (body+reason)
+                # length does not grow; 3 in a row means upstream is only
+                # re-sending the finished state — synthesize completion so
+                # non-stream collectors and the gateway can finish.
+                if self._emitted_image_keys and not resp["done"]:
+                    _tlen = len(resp["body"]) + len(resp["reason"])
+                    if _tlen != self._img_prev_text_len:
+                        self._img_tail_streak = 0
+                    else:
+                        self._img_tail_streak += 1
+                        if self._img_tail_streak >= 3:
+                            resp["done"] = True
+                            self.logger.info(
+                                "[IMG] Synthesized completion: image emitted, "
+                                "extracted text unchanged across passes"
+                            )
+                    self._img_prev_text_len = _tlen
             else:
                 self.logger.debug("Buffering incomplete JSON data...")
 

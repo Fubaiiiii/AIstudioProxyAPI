@@ -152,11 +152,11 @@ class PageController(
                     check_client_disconnected, "After Input Visible"
                 )
 
-                # Fill textarea using centralized logic (inherited from InputController if possible, or direct)
-                await textarea.evaluate(
-                    "(el, t) => { el.value = t; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); }",
-                    prompt,
-                )
+                # LOCAL PATCH: fill via Playwright (real input pipeline).
+                # The upstream JS value-set leaves the new UI's form state
+                # inconsistent; probes with fill() + Run click generate fine.
+                await textarea.click()
+                await textarea.fill(prompt)
                 await self._check_disconnect(
                     check_client_disconnected, "After Input Fill"
                 )
@@ -165,7 +165,13 @@ class PageController(
                     await self._open_upload_menu_and_choose_file(image_list)
 
                 # Wait for submit button to be enabled
-                submit = self.page.locator(SUBMIT_BUTTON_SELECTOR)
+                # LOCAL PATCH: upstream SUBMIT_BUTTON_SELECTOR does not match
+                # the current UI's Run button (never becomes "enabled"), which
+                # forced every submit onto the keyboard path. Use the locator
+                # proven by manual probes instead.
+                submit = self.page.locator(
+                    'ms-run-button button, button:has-text("Run")'
+                ).first
                 button_clicked = False
                 is_btn_enabled = False
                 try:

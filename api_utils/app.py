@@ -160,7 +160,10 @@ async def _initialize_browser_and_page():
         )
         if state.is_page_ready:
             await _handle_initial_model_state_and_storage(state.page_instance)
-            await enable_temporary_chat_mode(state.page_instance)
+            # Local A/B patch: temporary-chat mode disabled for diagnosis —
+            # GenerateContent returned PERMISSION_DENIED in temp mode with
+            # this account while a plain browser session generates fine.
+            # await enable_temporary_chat_mode(state.page_instance)
             state.logger.info("Page initialized successfully.")
         else:
             state.logger.error("Page initialization failed.")
