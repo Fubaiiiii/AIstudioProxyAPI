@@ -1,5 +1,10 @@
 # AI Studio Proxy API
 
+> **本仓库说明（Fork Notice）**
+> 本仓库是 [CJackHwang/AIstudioProxyAPI](https://github.com/CJackHwang/AIstudioProxyAPI) 的个人 fork（许可证 AGPL-3.0），已同步上游至 `044c3db` 并叠加本地补丁（生图输出支持、magpie 网关兼容、部署适配）。
+> 来源、许可证与逐项修改说明见 [docs/FORK_NOTES.md](docs/FORK_NOTES.md)，版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+> 以下为上游原始 README，内容归上游作者所有，本 fork 未改动其正文。
+
 将 Google AI Studio 网页界面转换为 OpenAI 兼容 API 的代理服务。通过 Camoufox + Playwright 自动化，提供稳定可控的 API 访问。
 
 [![Star History Chart](https://api.star-history.com/svg?repos=CJackHwang/AIstudioProxyAPI&type=Date)](https://www.star-history.com/#CJackHwang/AIstudioProxyAPI&Date)
